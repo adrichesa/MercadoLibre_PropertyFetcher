@@ -5,6 +5,17 @@ import pandas as pd
 from datetime import datetime, timedelta
 import webbrowser
 
+# Función para obtener las subcategorías de una categoría principal
+def obtener_subcategorias(category_id):
+    url = f"https://api.mercadolibre.com/categories/{category_id}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        return data['children_categories']
+    else:
+        print("Error al obtener subcategorías")
+        return []
+
 # Función para obtener los estados
 def obtener_estados():
     url = "https://api.mercadolibre.com/classified_locations/countries/AR"
@@ -50,7 +61,8 @@ def fetch_items(category_id, buying_mode, state_id=None, city_id=None, price_min
                 break
             offset += limit
         else:
-            print("Error al obtener artículos")
+            print("Error al obtener artículos:", response.status_code)
+            print(response.text)
             break
     return items
 
@@ -81,6 +93,7 @@ def clear_items():
     cursor.execute("DELETE FROM items")
     conn.commit()
     conn.close()
+    print("Base de datos limpiada.")
 
 # Función para almacenar los artículos en la base de datos
 def store_items(items):
@@ -104,6 +117,7 @@ def store_items(items):
             ))
     conn.commit()
     conn.close()
+    print(f"Almacenados {len(items)} artículos en la base de datos.")
 
 # Función para crear el mapa
 def create_map():
@@ -111,6 +125,12 @@ def create_map():
     query = "SELECT title, latitude, longitude, price, permalink FROM items WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
     df = pd.read_sql_query(query, conn)
     conn.close()
+    
+    if df.empty:
+        print("No hay datos de ubicación para mostrar en el mapa.")
+        return
+
+    print(f"Datos obtenidos para el mapa: {len(df)} filas.")
 
     map_center = [df['latitude'].mean(), df['longitude'].mean()] if not df.empty else [-34.6083, -58.3712]
     m = folium.Map(location=map_center, zoom_start=12)
@@ -124,8 +144,10 @@ def create_map():
             tooltip=row['title']
         ).add_to(m)
 
+    folium.TileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', 
+                     attr='OpenStreetMap', name='OpenStreetMap').add_to(m)
     folium.TileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', 
-                     attr='Google', name='Google Street View').add_to(m)
+                     attr='Google', name='Google Satélite').add_to(m)
     
     folium.LayerControl().add_to(m)
     m.save('mapa_inmuebles.html')
@@ -134,6 +156,13 @@ def create_map():
 def main():
     create_table()  # Crear la tabla si no existe
     clear_items()  # Borrar los artículos existentes en la base de datos
+
+    # Obtener categorías de propiedades
+    category_id = "MLA1459"  # ID de la categoría principal de propiedades
+    subcategorias = obtener_subcategorias(category_id)
+    print("Subcategorías disponibles para propiedades:")
+    for subcategoria in subcategorias:
+        print(f"{subcategoria['name']} - ID: {subcategoria['id']}")
 
     # Seleccionar estado
     estados = obtener_estados()
@@ -151,6 +180,20 @@ def main():
     distrito_idx = int(input("Ingrese el número del distrito deseado: ")) - 1
     city_id = distritos[distrito_idx]['id']
 
+    # Realizar una solicitud directa con los parámetros obtenidos
+    print(f"Realizando solicitud directa con la categoría MLA1466, estado {state_id} y ciudad {city_id}")
+    url = f"https://api.mercadolibre.com/sites/MLA/search?category=MLA1466&buying_mode=buying&state={state_id}&city={city_id}&offset=0&limit=50"
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        print(f"Total de resultados: {data['paging']['total']}")
+        print("Ejemplos de resultados:")
+        for result in data['results'][:5]:
+            print(result)
+    else:
+        print("Error al realizar la solicitud:", response.status_code)
+        print(response.text)
+
     # Seleccionar opción de compra/alquiler
     print("Seleccione una opción:")
     print("1. Comprar")
@@ -162,8 +205,8 @@ def main():
     print("1. Departamento")
     print("2. Casa")
     print("3. Local")
-    property_type_map = {1: "apartment", 2: "house", 3: "store"}
-    property_type = property_type_map[int(input("Ingrese el número del tipo de propiedad deseado: "))]
+    property_type_map = {1: "MLA1472", 2: "MLA1466", 3: "MLA79242"}  # Categorías específicas de MercadoLibre
+    category_id = property_type_map[int(input("Ingrese el número del tipo de propiedad deseado: "))]
 
     # Seleccionar rango de precios
     print("Desea establecer un rango de precios?")
@@ -176,14 +219,14 @@ def main():
         price_min = price_max = None
 
     # Obtener artículos
-    items = fetch_items("MLA1459", buying_mode, state_id=state_id, city_id=city_id, price_min=price_min, price_max=price_max)
+    items = fetch_items(category_id, buying_mode, state_id=state_id, city_id=city_id, price_min=price_min, price_max=price_max)
 
-    print(f"Valid items with location data: {len([item for item in items if 'location' in item and 'latitude' in item['location'] and 'longitude' in item['location']])}")
+    valid_items = [item for item in items if 'location' in item and 'latitude' in item['location'] and 'longitude' in item['location']]
+    print(f"Valid items with location data: {len(valid_items)}")
 
-    if items:
+    if valid_items:
         # Almacenar artículos en la base de datos
-        store_items(items)
-        print(f"{len(items)} items inserted into the database.")
+        store_items(valid_items)
         # Crear el mapa
         create_map()
         print("Mapa creado: 'mapa_inmuebles.html'")
@@ -192,4 +235,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
